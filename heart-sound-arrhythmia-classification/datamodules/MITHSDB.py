@@ -1,3 +1,4 @@
+# MITHSDB dataset from PhysioNet 2016
 import os
 import torch
 import pytorch_lightning as pl
@@ -11,15 +12,12 @@ import wfdb
 
 
 class physionet(pl.LightningDataModule):
-    def __init__(self, data_path, sample_shape=(2500), dataset_split=[0.7, .1, .2], file_extention="wav", freq=500):
-        self.file_extention = file_extention
+    def __init__(self, data_path, sample_shape=(2500), dataset_split=[0.7, .1, .2], freq=500):
         self.freq = freq
         self.sample_shape = sample_shape
         self.dataset_split = dataset_split
 
-        self.dataset_dir = [f"{data_path}/training-a/", f"{data_path}/training-b/",
-                            f"{data_path}/training-c/", f"{data_path}/training-d/",
-                            f"{data_path}/training-e/", f"{data_path}/training-f/"]
+        self.dataset_dir = [f"{data_path}/training-a/"]
 
         self.dataset_lbls = {"normal": 0, "abnormal": 1}
 
@@ -35,31 +33,40 @@ class physionet(pl.LightningDataModule):
                 fn, lbl = record
                 lbl = 0 if int(lbl) < 0 else int(lbl)
 
-                # Reading audio file
-                freq, audio = wavfile.read(f"{path}{fn}.wav")
+                rdrecord = wfdb.rdrecord(f'{path}{fn}')
+                if rdrecord.p_signal.shape[-1] == 1:
+                    continue
+                PCG, ECG = np.transpose(rdrecord.p_signal)
 
-                self.data.append([freq, audio, lbl])
+                info = wfdb.rdsamp(f'{path}{fn}')
+                freq = info[1]["fs"]
+
+                self.data.append([freq, PCG, ECG])
         print("Done Preparing data!")
 
     def prepare_data(self, stage=None):
         print("Starting Preprocessing...")
-        for freq, audio, lbl in tqdm(self.data):
+        for freq, PCG, ECG in tqdm(self.data):
 
             # Resample to freq
-            freq, audio = self.resample(audio, freq, self.freq)
+            _, PCG = self.resample(PCG, freq, self.freq)
+            _, ECG = self.resample(ECG, freq, self.freq)
 
             # Standardize
-            audio = (np.array(audio) - np.mean(audio)) / np.std(audio)
+            PCG = (np.array(PCG) - np.mean(PCG)) / np.std(PCG)
+            ECG = (np.array(ECG) - np.mean(ECG)) / np.std(ECG)
 
             # Splitting
-            audio_splits = self.split_data(audio, self.sample_shape)
+            PCG_splits = self.split_data(PCG, self.sample_shape)
+            ECG_splits = self.split_data(ECG, self.sample_shape)
 
-            for audio_sample in audio_splits:
-                self.x.append(audio_sample)
-                self.y.append(lbl)
+            for PCG, ECG in zip(PCG_splits, ECG_splits):
+                self.x.append(PCG)
+                self.y.append(ECG)
 
         # Sparce Split Dataset
-        self.traning_set, self.validation_set, self.testing_set = self.split_dataset(self.x, self.y, self.dataset_split)
+        self.traning_set, self.validation_set, self.testing_set = self.split_dataset(
+            self.x, self.y, self.dataset_split, stratified=False)
         self.traning_set = [torch.tensor(self.traning_set[0]), torch.tensor(self.traning_set[1])]
         self.validation_set = [torch.tensor(self.validation_set[0]), torch.tensor(self.validation_set[1])]
         self.testing_set = [torch.tensor(self.testing_set[0]), torch.tensor(self.testing_set[1])]
@@ -90,9 +97,23 @@ class physionet(pl.LightningDataModule):
         1/2 = number of labels for type for testing set
         """
         dataset = list(map(list, zip(x, y)))
+        split_x, split_y = [[] for _ in ratio], [[] for _ in ratio]
 
         if stratified == False:
-            return None
+
+            np.random.shuffle(dataset)
+            split_idx = ratio.copy()
+            split_idx.insert(0, 0)
+            split_idx = np.array(split_idx)
+            split_idx = np.floor(len(dataset) * split_idx).astype(int)
+
+            for set_n in range(len(ratio)):
+                start, end = sum(split_idx[:set_n + 1]), sum(split_idx[:set_n + 2])
+                split_set = dataset[start:end]
+
+                [split_x[set_n].append(i[0]) for i in split_set]
+                [split_y[set_n].append(i[1]) for i in split_set]
+            return list(map(list, zip(split_x, split_y)))
 
         label_maped = {}
 
@@ -108,8 +129,6 @@ class physionet(pl.LightningDataModule):
 
         split_idx = {lbl: np.floor(idx_ratio * len(label_maped[lbl])).astype(int) for lbl in label_maped.keys()}
 
-        split_x, split_y = [[] for _ in ratio], [[] for _ in ratio]
-
         for set_n in range(len(ratio)):
             for lbl in label_maped.keys():
                 start, end = sum(split_idx[lbl][:set_n + 1]), sum(split_idx[lbl][:set_n + 2])
@@ -122,8 +141,7 @@ class physionet(pl.LightningDataModule):
 
     def train_dataloader(self):
         dataset = TensorDataset(self.traning_set[0], self.traning_set[1])
-        data_loader = DataLoader(dataset, batch_size=128, sampler=ImbalancedDatasetSampler(
-            dataset, callback_get_label=lambda dataset, idx: int(dataset[idx][1])))
+        data_loader = DataLoader(dataset, batch_size=128)
         return data_loader
 
     def val_dataloader(self):

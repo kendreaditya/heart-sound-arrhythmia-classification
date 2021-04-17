@@ -10,7 +10,7 @@ import numpy as np
 
 
 class PASCAL(pl.LightningDataModule):
-    def __init__(self, data_path, sample_length=2500, dataset_split=[0.7, .1, .2], file_extention="wav", freq=500):
+    def __init__(self, data_path, sample_length=(2500), dataset_split=[0.7, .1, .2], file_extention="wav", freq=500):
         self.file_extention = file_extention
         self.freq = freq
         self.sample_length = sample_length
