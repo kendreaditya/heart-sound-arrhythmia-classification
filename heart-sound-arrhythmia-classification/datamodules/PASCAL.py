@@ -144,3 +144,4 @@ if __name__ == "__main__":
         "K:\OneDrive - Cumberland Valley School District\Education\Activates\Science Fair\PCG-Science-Fair\PCG-arrhythmia-detection\data\PASCAL")
     datamodule.setup()
     datamodule.prepare_data()
+    datamodule.train_dataloader()
